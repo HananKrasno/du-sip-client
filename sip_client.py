@@ -15,8 +15,8 @@ TSYSTEM = "tsystem"
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument("--mode", choices=[MOBOTIX, TSYSTEM], default=MOBOTIX)
-parser.add_argument("--calluri", default="")
+parser.add_argument("--profile", choices=[MOBOTIX, TSYSTEM], default=MOBOTIX)
+parser.add_argument("--sip-number", default="")
 parser.add_argument("--downport", type=int, default=6600)
 parser.add_argument("--upport", type=int, default=6700)
 parser.add_argument("--interval-in-ms", type=int)
@@ -35,10 +35,10 @@ class MyAccount(pj.Account):
 
 
 class CallTest:
-    def __init__(self, destination):
+    def __init__(self, profile):
         self.custom_audio_media = None
         self.logger = log.Logger()
-        self.destination = destination
+        self.profile = profile
         self.sipNumber = None
         self.upStreamPort = 0
         self.downStreamPort = 0
@@ -72,25 +72,24 @@ class CallTest:
         self.ep.libInit(self.appConfig.epConfig)
 
     def listDevices(self):
-        audio_dev_info = self.ep.audDevManager.enumDev()
+        audio_dev_man = self.ep.audDevManager()
 
         # Print the list of audio input (capture) devices
-        print("Audio Input (Capture) Devices:")
-        for i, dev in enumerate(audio_dev_info):
-            if dev.inputCount > 0:
-                print(f"{i + 1}. {dev.name}")
+        for i in range(0, audio_dev_man.getDevCount()):
+            devInfo = audio_dev_man.getDevInfo(i)
+            print(f"#{i}) {devInfo.name} inp: {devInfo.inputCount} out: {devInfo.outputCount}")
 
-        # Print the list of audio output (playback) devices
-        print("\nAudio Output (Playback) Devices:")
-        for i, dev in enumerate(audio_dev_info):
-            if dev.outputCount > 0:
-                print(f"{i + 1}. {dev.name}")
+    def setSipNumber(self, defSipNumber):
+        if args.sip_number == "":
+            self.sipNumber = defSipNumber
+        else:
+            self.sipNumber = "sip:" + args.sip_number
+        print(f"Sip number is: {self.sipNumber}")
 
     def createMobotixAccount(self):
         self.acfg = pj.AccountConfig()
-        self.acfg.idUri = "sip:hanan@10.20.97.100"
-        # acfg.regConfig.registrarUri = "sip:sip.pjsip.org"
-        cred = pj.AuthCredInfo("digest", "*", "hanan", 0, "")
+        self.acfg.idUri = "sip:driveu@10.20.97.100"
+        cred = pj.AuthCredInfo("digest", "*", "driveu", 0, "")
         self.acfg.sipConfig.authCreds.append(cred)
         # Create the account
         self.acc = pj.Account()
@@ -120,18 +119,20 @@ class CallTest:
         # transport.create(transport_cfg)
 
         self.ep.libStart()
-        if self.destination == TSYSTEM:
+        if self.profile == TSYSTEM:
             self.createTsystemAccount()
-            self.sipNumber = "sip:100@localhost"
+            self.setSipNumber("sip:100@localhost")
             self.downStreamPort = args.downport
             # self.upStreamPort = args.upport
 
-        elif self.destination == MOBOTIX:
+        elif self.profile == MOBOTIX:
             self.createMobotixAccount()
-            self.sipNumber = "sip:hanan@10.20.97.222"
-            self.downStreamPort = 6600
+            self.setSipNumber("sip:100@10.20.97.222")
+            self.downStreamPort = args.downport
             # self.upStreamPort = 6700
        # self.listDevices()
+        audio_dev_man = self.ep.audDevManager()
+        audio_dev_man.setNullDev()
 
     def call(self):
         self.start()
@@ -176,7 +177,7 @@ def sendTestFile(fileName="/home/me/work/pjproject/pjsip-apps/src/pygui/playfile
 # Run the main loop
 try:
     # sendTestFile()
-    callTest = CallTest(args.mode)
+    callTest = CallTest(args.profile)
     callTest.call()
 except KeyboardInterrupt:
     print("Exiting...")
