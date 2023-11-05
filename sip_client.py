@@ -3,6 +3,7 @@ import time
 import socket
 from array import array
 import argparse
+import sys
 
 import settings
 import ducall
@@ -11,15 +12,17 @@ import endpoint as ep
 
 
 MOBOTIX = "mobotix"
-TSYSTEM = "tsystem"
+TSYSTEMS = "tsystems"
+
+write=sys.stdout.write
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument("--profile", choices=[MOBOTIX, TSYSTEM], default=MOBOTIX)
+parser.add_argument("--profile", choices=[MOBOTIX, TSYSTEMS], default=MOBOTIX)
 parser.add_argument("--sip-number", default="")
-parser.add_argument("--downport", type=int, default=6600)
-parser.add_argument("--upport", type=int, default=6700)
-parser.add_argument("--interval-in-ms", type=int)
+parser.add_argument("--downport", type=int, default=6600, help="UDP port for PCM stream from Streamer to SIP server")
+parser.add_argument("--upport", type=int, default=6700, help="UDP port for PCM stream from SIP server to Streamer")
+parser.add_argument("--use-sniffer", action="store_true", help="When defined the downstream socket will work in sniff mode. It allows to read the data when when port is used by other apps")
 
 args = parser.parse_args()
 
@@ -79,9 +82,9 @@ class CallTest:
             devInfo = audio_dev_man.getDevInfo(i)
             print(f"#{i}) {devInfo.name} inp: {devInfo.inputCount} out: {devInfo.outputCount}")
 
-    def setSipNumber(self, defSipNumber):
+    def setSipNumber(self, defaultSipNumber):
         if args.sip_number == "":
-            self.sipNumber = defSipNumber
+            self.sipNumber = defaultSipNumber
         else:
             self.sipNumber = "sip:" + args.sip_number
         print(f"Sip number is: {self.sipNumber}")
@@ -93,6 +96,7 @@ class CallTest:
         self.acfg.sipConfig.authCreds.append(cred)
         # Create the account
         self.acc = pj.Account()
+        self.acc.cfg = self.acfg
         self.acc.create(self.acfg)
 
     def createTsystemAccount(self):
@@ -105,7 +109,20 @@ class CallTest:
         # Create the account
         self.acc = pj.Account()
         self.acc.create(self.acfg)
-        time.sleep(2)
+        try:
+            self.acc.setRegistration(True)
+        except pj.Error as error:
+            write("Exception:\r\n")
+            write("  ," + error.info() + "\r\n")
+            write("Traceback:\r\n")
+            log.writeLog2(1, 'Exception: ' + error.info() + '\n')
+        except Exception as error:
+            write("Exception:\r\n")
+            write("  ," +  str(error) + "\r\n")
+            write("Traceback:\r\n")
+            write(traceback.print_stack())
+        print("XXXXXXXXX Set registration")
+
         # self.acc.setRegistration(True)
         print("Account successfully created")
 
@@ -119,17 +136,21 @@ class CallTest:
         # transport.create(transport_cfg)
 
         self.ep.libStart()
-        if self.profile == TSYSTEM:
+        if self.profile == TSYSTEMS:
             self.createTsystemAccount()
-            self.setSipNumber("sip:100@localhost")
+            self.setSipNumber(defaultSipNumber="sip:100@localhost")
             self.downStreamPort = args.downport
-            # self.upStreamPort = args.upport
+            self.upStreamPort = args.upport
+            print(f"Set SIP T-Systems profile:  "
+                  f"\n\tnumber {self.sipNumber}"
+                  f"\n\tdown stream port {self.downStreamPort}"
+                  f"\n\tup stream port {self.upStreamPort}")
 
         elif self.profile == MOBOTIX:
             self.createMobotixAccount()
-            self.setSipNumber("sip:100@10.20.97.222")
+            self.setSipNumber(defaultSipNumber="sip:100@10.20.97.222")
             self.downStreamPort = args.downport
-            # self.upStreamPort = 6700
+            # self.upStreamPort = args.upport
        # self.listDevices()
         audio_dev_man = self.ep.audDevManager()
         audio_dev_man.setNullDev()
@@ -139,7 +160,7 @@ class CallTest:
         # Make an outgoing call
         try:
             callUri = self.sipNumber
-            self.myCall = ducall.Call(acc=self.acc, peer_uri=callUri, upStreamPort=self.upStreamPort, downStreamPort=self.downStreamPort)
+            self.myCall = ducall.Call(acc=self.acc, peer_uri=callUri, upStreamPort=self.upStreamPort, downStreamPort=self.downStreamPort, useSniffer=args.use_sniffer)
             self.call_param = pj.CallOpParam()
             self.call_param.opt.audioCount = 1
             self.call_param.opt.videoCount = 0

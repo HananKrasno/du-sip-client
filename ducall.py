@@ -20,16 +20,6 @@
 import sys
 import time
 
-if sys.version_info[0] >= 3: # Python 3
-    import tkinter as tk
-    from tkinter import ttk
-    from tkinter import messagebox as msgbox
-else:
-    import Tkinter as tk
-    import tkMessageBox as msgbox
-    import ttk
-
-import random
 import pjsua2 as pj
 import application
 from udpsniffer import UdpSniffer
@@ -41,18 +31,27 @@ import threading
 
 USE_CUSTOM_MEDIA = True
 
-class DriveUMediaPort(pj.AudioMediaPort):
+CLOCK_RATE = 16000
+CHANNEL_COUNT = 1
+BITS_PER_SAMPLE = 16
+FRAME_TIME_USEC = 20000
 
-    def __init__(self, upStreamPort, downStreamPort):
+
+class DriveUMediaPort(pj.AudioMediaPort):
+    def __init__(self, upStreamPort, downStreamPort, useSniffer=False):
+        print(f"DriveUMediaPort constructor {id(self)}")
         pj.AudioMediaPort.__init__(self)
+        self.frameFromDuCount = 0
         self.frameCount = 0
+        self.framesSentCount = 0
         self.frameBuffer = None
         self.framesToSip = queue.Queue()
         self.framesFromSip = queue.Queue()
-        self.bufferSize = 1024
         self.count = 0
         self.downStreamPort = downStreamPort
         self.upStreamPort = upStreamPort
+        self.useSniffer = useSniffer
+
         self.upStreamSocket = None
         if self.upStreamPort > 0:
             self.upStreamSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -66,7 +65,7 @@ class DriveUMediaPort(pj.AudioMediaPort):
 
     def processStream(self, data):
         frameBuf = []
-        print("processStreamS")
+        # print("processStream")
         for i in range(len(data)):
             if (i % 2 == 1):
                 # Convert it to signed 16-bit integer
@@ -79,31 +78,51 @@ class DriveUMediaPort(pj.AudioMediaPort):
             self.frameBuffer.append(data[i + 1])
             if self.frameBuffer.size() == 640:
                 self.framesToSip.put(self.frameBuffer)
-                print(f"---- Added Frame")
+                if self.frameFromDuCount % 50 == 0:
+                    print(f"---- Added Frame {self.frameFromDuCount}")
+                self.frameFromDuCount += 1
                 self.frameBuffer = pj.ByteVector()
+
+    def processStreamAsIs(self, data):
+        frameBuffer = pj.ByteVector()
+        for i in range(len(data)):
+            frameBuffer.append(data[i])
+        self.framesToSip.put(frameBuffer)
+        if self.frameFromDuCount % 50 == 0:
+            print(f"{time.time()} ---- Added Frame As Is {self.frameFromDuCount} qsize: {self.framesToSip.qsize()}")
+        self.frameFromDuCount += 1
 
     def listenForDownStream(self):
         print(f"Downstream listener thread is started")
         self.frameBuffer = pj.ByteVector()
+        if self.useSniffer:
+            print("Downstream initialized in sniffing mode")
+            self.downStreamSniffer.sniff(self.processStreamAsIs)
+        else:
+            print("Downstream initialized in reading mode")
+            self.downStreamSniffer.read(self.processStreamAsIs)
         # self.downStreamSniffer.sniff(self.processStream)
-        self.downStreamSniffer.read(self.processStream)
 
     def onFrameRequested(self, frame):
-        frame.type = pj.PJMEDIA_TYPE_AUDIO
-        frame.size = 640
-        if self.framesToSip.qsize():
+        qsize = self.framesToSip.qsize()
+        if qsize > 0:
+            frame.type = pj.PJMEDIA_TYPE_AUDIO
             # Get a frame from the queue and pass it to PJSIP
             frame.buf = self.framesToSip.get()
-            print("-------- Frame sent")
+            frame.size = frame.buf.size()
+            if self.framesSentCount % 50 == 0:
+                print(f"{time.time()}-------- Frames sent: {self.framesSentCount}, size: {frame.buf.size()}")
+            self.framesSentCount += 1
         else:
-            self.setEmptyFrame(frame)
-        # elif self.downStreamSniffer is None:
-        #     self.createDummyFrame(frame)
+            frame.type = pj.PJMEDIA_TYPE_NONE
+            frame.size = 0
+            # self.setEmptyFrame(frame)
 
     def setEmptyFrame(self, frame):
         frame.buf = pj.ByteVector()
         for i in range(frame.size):
             frame.buf.append(0)
+
     def createDummyFrameBuffer(self, frameSize):
         frame_ = pj.ByteVector()
         for i in range(frameSize):
@@ -136,46 +155,12 @@ class DriveUMediaPort(pj.AudioMediaPort):
         if self.upStreamSocket:
             barr = bytes(frame.buf)
             self.upStreamSocket.sendto(barr, ("0.0.0.0", self.upStreamPort))
+            # self.playbackFile.write(barr)
+            if self.frameCount % 50 == 0:
+                print(f"{time.time()}+++++  on frame received and sent to playback device: {self.frameCount}")
+
             # print(f"Sent frame to DriveU port: {self.upStreamPort} data: {barr[100:]}")
         return
-        # frame_ = pj.ByteVector()
-        # if self.frameCount % 1 == 0: # and frame.buf.size() > 0:
-        #     frameBuf = []
-        #     for i in range(frame.buf.size()):
-        #         if (i % 2 == 1):
-        #             # Convert it to signed 16-bit integer
-        #             x = frame.buf[i] << 8 | frame.buf[i-1]
-        #             x = struct.unpack('<h', struct.pack('<H', x))[0]
-        #             frameBuf.append(x)
-        #         frame_.append(frame.buf[i])
-        #     # print(f"+++++++++ frame {self.frameCount} received. Size: {frameBuf}")
-        #     self.framesToSip.put(frame_)
-        # return
-        frame_ = pj.ByteVector()
-        for i in range(frame.buf.size()):
-            if (i % 2 == 1):
-                # Convert it to signed 16-bit integer
-                x = frame.buf[i] << 8 | frame.buf[i-1]
-                x = struct.unpack('<h', struct.pack('<H', x))[0]
-
-                # Amplify the signal by 50% and clip it
-                # x = int(np.sin((self.count / 10) % 6) * 16767)
-                x = int(x * 1.5)
-                if (x > 32767):
-                    x = 32767
-                else:
-                    if (x < -32768):
-                        x = -32768
-
-                # Convert it to unsigned 16-bit integer
-                x = struct.unpack('<H', struct.pack('<h', x))[0]
-
-                # Put it back in the vector in little endian order
-                frame_.append(x & 0xff)
-                frame_.append((x & 0xff00) >> 8)
-                self.count += 1
-
-        self.framesToSip.put(frame_)
 
 
 
@@ -185,7 +170,7 @@ class Call(pj.Call):
     """
     High level Python Call object, derived from pjsua2's Call object.
     """
-    def __init__(self, acc, peer_uri='', chat=None, call_id=pj.PJSUA_INVALID_ID, downStreamPort=0, upStreamPort=0):
+    def __init__(self, acc, peer_uri='', chat=None, call_id=pj.PJSUA_INVALID_ID, downStreamPort=0, upStreamPort=0, useSniffer=False):
         pj.Call.__init__(self, acc, call_id)
         self.acc = acc
         self.peerUri = peer_uri
@@ -193,9 +178,11 @@ class Call(pj.Call):
         self.connected = False
         self.onhold = False
         self.custom_audio_media = None
-        self.firstTime = True
+        self.secondTime = False
         self.downStreamPort = downStreamPort
         self.upStreamPort = upStreamPort
+        self.med_port = None
+        self.useSniffer = useSniffer
 
         print(f"XXXX   {self.__dict__}")
 
@@ -217,14 +204,16 @@ class Call(pj.Call):
             self.chat.updateCallState(self, ci)
 
     def createCustomMediaPort(self):
+        if self.med_port:
+            return
         fmt = pj.MediaFormatAudio()
         fmt.type = pj.PJMEDIA_TYPE_AUDIO
-        fmt.clockRate = 16000
-        fmt.channelCount = 1
-        fmt.bitsPerSample = 16
-        fmt.frameTimeUsec = 20000
+        fmt.clockRate = CLOCK_RATE
+        fmt.channelCount = CHANNEL_COUNT
+        fmt.bitsPerSample = BITS_PER_SAMPLE
+        fmt.frameTimeUsec = FRAME_TIME_USEC
 
-        self.med_port = DriveUMediaPort(upStreamPort=self.upStreamPort, downStreamPort=self.downStreamPort)
+        self.med_port = DriveUMediaPort(upStreamPort=self.upStreamPort, downStreamPort=self.downStreamPort, useSniffer=self.useSniffer)
         self.med_port.createPort("med_port", fmt)
 
 
@@ -250,10 +239,12 @@ class Call(pj.Call):
         self.custom_audio_media.startTransmit(speaker)
 
     def onCallMediaState(self, prm):
-        print(f'XXXX   Call Media state')
-        if not self.firstTime:
+        print(f'Call Media state')
+        # We reach this point twice but only second time is important
+        if not self.secondTime:
+            self.secondTime = True
             return
-        self.firstTime = False
+        # self.firstTime = False
         ci = self.getInfo()
         for mi in ci.media:
             if mi.type == pj.PJMEDIA_TYPE_AUDIO and \
