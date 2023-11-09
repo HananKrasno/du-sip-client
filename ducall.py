@@ -28,18 +28,20 @@ import struct
 import queue
 import socket
 import threading
+import logging
+
 
 USE_CUSTOM_MEDIA = True
 
 CLOCK_RATE = 16000
 CHANNEL_COUNT = 1
 BITS_PER_SAMPLE = 16
-FRAME_TIME_USEC = 20000
+FRAME_TIME_USEC = 40000
 
 
 class DriveUMediaPort(pj.AudioMediaPort):
-    def __init__(self, upStreamPort, downStreamPort, useSniffer=False):
-        print(f"DriveUMediaPort constructor {id(self)}")
+    def __init__(self, upStreamPort, downStreamPort, useSniffer=False, playbackFile=None):
+        logging.info(f"DriveUMediaPort constructor {id(self)}")
         pj.AudioMediaPort.__init__(self)
         self.frameFromDuCount = 0
         self.frameCount = 0
@@ -51,11 +53,14 @@ class DriveUMediaPort(pj.AudioMediaPort):
         self.downStreamPort = downStreamPort
         self.upStreamPort = upStreamPort
         self.useSniffer = useSniffer
+        self.playbackFile = None
+        if playbackFile:
+            self.playbackFile = open(playbackFile, "wb")
 
         self.upStreamSocket = None
         if self.upStreamPort > 0:
             self.upStreamSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            print(f"Created upstream socket. Port {self.upStreamPort}")
+            logging.info(f"Created upstream socket. Port {self.upStreamPort}")
         if self.downStreamPort:
             self.downStreamSniffer = UdpSniffer(downStreamPort)
             self.downStreamThread = threading.Thread(target=self.listenForDownStream, daemon=True)
@@ -65,21 +70,21 @@ class DriveUMediaPort(pj.AudioMediaPort):
 
     def processStream(self, data):
         frameBuf = []
-        # print("processStream")
+        # logging.info("processStream")
         for i in range(len(data)):
             if (i % 2 == 1):
                 # Convert it to signed 16-bit integer
                 x = data[i] << 8 | data[i-1]
                 x = struct.unpack('<h', struct.pack('<H', x))[0]
                 frameBuf.append(x)
-        # print(f"-------------- frame {self.frameCount} received. Size: {frameBuf}")
+        # logging.info(f"-------------- frame {self.frameCount} received. Size: {frameBuf}")
         for i in range(0, len(data), 2):
             self.frameBuffer.append(data[i])
             self.frameBuffer.append(data[i + 1])
             if self.frameBuffer.size() == 640:
                 self.framesToSip.put(self.frameBuffer)
                 if self.frameFromDuCount % 50 == 0:
-                    print(f"---- Added Frame {self.frameFromDuCount}")
+                    logging.debug(f"---- Added Frame {self.frameFromDuCount}")
                 self.frameFromDuCount += 1
                 self.frameBuffer = pj.ByteVector()
 
@@ -89,17 +94,17 @@ class DriveUMediaPort(pj.AudioMediaPort):
             frameBuffer.append(data[i])
         self.framesToSip.put(frameBuffer)
         if self.frameFromDuCount % 50 == 0:
-            print(f"{time.time()} ---- Added Frame As Is {self.frameFromDuCount} qsize: {self.framesToSip.qsize()}")
+            logging.debug(f"{time.time()} ---- Added Frame As Is {self.frameFromDuCount} qsize: {self.framesToSip.qsize()}")
         self.frameFromDuCount += 1
 
     def listenForDownStream(self):
-        print(f"Downstream listener thread is started")
+        logging.info(f"Downstream listener thread is started")
         self.frameBuffer = pj.ByteVector()
         if self.useSniffer:
-            print("Downstream initialized in sniffing mode")
+            logging.info("Downstream initialized in sniffing mode")
             self.downStreamSniffer.sniff(self.processStreamAsIs)
         else:
-            print("Downstream initialized in reading mode")
+            logging.info("Downstream initialized in reading mode")
             self.downStreamSniffer.read(self.processStreamAsIs)
         # self.downStreamSniffer.sniff(self.processStream)
 
@@ -111,7 +116,7 @@ class DriveUMediaPort(pj.AudioMediaPort):
             frame.buf = self.framesToSip.get()
             frame.size = frame.buf.size()
             if self.framesSentCount % 50 == 0:
-                print(f"{time.time()}-------- Frames sent: {self.framesSentCount}, size: {frame.buf.size()}")
+                logging.debug(f"{time.time()}-------- Frames sent: {self.framesSentCount}, size: {frame.buf.size()}")
             self.framesSentCount += 1
         else:
             frame.type = pj.PJMEDIA_TYPE_NONE
@@ -157,9 +162,11 @@ class DriveUMediaPort(pj.AudioMediaPort):
             self.upStreamSocket.sendto(barr, ("0.0.0.0", self.upStreamPort))
             # self.playbackFile.write(barr)
             if self.frameCount % 50 == 0:
-                print(f"{time.time()}+++++  on frame received and sent to playback device: {self.frameCount}")
+                logging.debug(f"{time.time()}+++++  on frame received and sent to playback device: {self.frameCount}")
+            if self.playbackFile:
+                self.playbackFile.write(barr)
 
-            # print(f"Sent frame to DriveU port: {self.upStreamPort} data: {barr[100:]}")
+            # logging.info(f"Sent frame to DriveU port: {self.upStreamPort} data: {barr[100:]}")
         return
 
 
@@ -170,7 +177,7 @@ class Call(pj.Call):
     """
     High level Python Call object, derived from pjsua2's Call object.
     """
-    def __init__(self, acc, peer_uri='', chat=None, call_id=pj.PJSUA_INVALID_ID, downStreamPort=0, upStreamPort=0, useSniffer=False):
+    def __init__(self, acc, peer_uri='', chat=None, call_id=pj.PJSUA_INVALID_ID, downStreamPort=0, upStreamPort=0, useSniffer=None, playbackFile=None):
         pj.Call.__init__(self, acc, call_id)
         self.acc = acc
         self.peerUri = peer_uri
@@ -183,13 +190,12 @@ class Call(pj.Call):
         self.upStreamPort = upStreamPort
         self.med_port = None
         self.useSniffer = useSniffer
-
-        print(f"XXXX   {self.__dict__}")
+        self.playbackFile = playbackFile
 
     def getAudioMedia(self):
         ci = self.getInfo()
         for mi in ci.media:
-            print(f"type {mi.type}, status {mi.status}")
+            logging.info(f"type {mi.type}, status {mi.status}")
             if mi.type == pj.PJMEDIA_TYPE_AUDIO and \
               (mi.status != pj.PJSUA_CALL_MEDIA_NONE and \
                mi.status != pj.PJSUA_CALL_MEDIA_ERROR):
@@ -197,7 +203,7 @@ class Call(pj.Call):
         return None
 
     def onCallState(self, prm):
-        print(f'XXXX   Call state')
+        logging.info(f'XXXX   Call state')
         ci = self.getInfo()
         self.connected = ci.state == pj.PJSIP_INV_STATE_CONFIRMED
         if self.chat:
@@ -213,7 +219,7 @@ class Call(pj.Call):
         fmt.bitsPerSample = BITS_PER_SAMPLE
         fmt.frameTimeUsec = FRAME_TIME_USEC
 
-        self.med_port = DriveUMediaPort(upStreamPort=self.upStreamPort, downStreamPort=self.downStreamPort, useSniffer=self.useSniffer)
+        self.med_port = DriveUMediaPort(upStreamPort=self.upStreamPort, downStreamPort=self.downStreamPort, useSniffer=self.useSniffer, playbackFile=self.playbackFile)
         self.med_port.createPort("med_port", fmt)
 
 
@@ -239,7 +245,7 @@ class Call(pj.Call):
         self.custom_audio_media.startTransmit(speaker)
 
     def onCallMediaState(self, prm):
-        print(f'Call Media state')
+        logging.info(f'Call Media state')
         # We reach this point twice but only second time is important
         if not self.secondTime:
             self.secondTime = True
@@ -263,7 +269,7 @@ class Call(pj.Call):
                 if not USE_CUSTOM_MEDIA:
                     ep.Endpoint.instance.audDevManager().getCaptureDevMedia().startTransmit(am)
                     am.startTransmit(ep.Endpoint.instance.audDevManager().getPlaybackDevMedia())
-                print(f'Call Media state startTransmit {ep} {am} {mi}')
+                logging.info(f'Call Media state startTransmit {ep} {am} {mi}')
 
                 if mi.status == pj.PJSUA_CALL_MEDIA_REMOTE_HOLD and not self.onhold:
                     self.chat.addMessage(None, "'%s' sets call onhold" % (self.peerUri))
@@ -273,7 +279,7 @@ class Call(pj.Call):
                     self.onhold = False
         if self.chat:
             self.chat.updateCallMediaState(self, ci)
-            print(f'Call Media state updateCallMediaState {ci}')
+            logging.info(f'Call Media state updateCallMediaState {ci}')
 
     def onInstantMessage(self, prm):
         # chat instance should have been initalized

@@ -1,5 +1,6 @@
 import socket
 import struct
+import time
 
 
 class UdpSniffer:
@@ -15,15 +16,15 @@ class UdpSniffer:
         while True:
             raw_data, addr = sock.recvfrom(1024)
             dataProcessor(raw_data)
+
     def sniff(self, dataProcessor):
-        logging.info(f"Creating UdpSniffer on port {self._port}")
         snifferSocket = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3))
         snifferSocket.bind(("lo", 0))
         pktCount = 0
-        logging.info(f"Created UdpSniffer on port {self._port}")
+        print("Started")
         while True:
             raw_data, addr = snifferSocket.recvfrom(1024)
-            # logging.info(f"UDP sniffer started on interface: {addr}")
+            # print(f"UDP sniffer started on interface: {addr}")
             if UdpSniffer.pktProtocol(addr) != self.APv4_PROTOCOL or UdpSniffer.pktInterfaceIndex(addr) != 0:
                 continue
             # Parse IP header
@@ -34,7 +35,7 @@ class UdpSniffer:
                 udp_src_port = udp_header_data[0]
                 udp_dest_port = udp_header_data[1]
 
-                # logging.info(f"ports: {udp_header_data[0]} {udp_header_data[1]}")
+                # print(f"ports: {udp_header_data[0]} {udp_header_data[1]}")
                 # Extract UDP payload
                 if udp_dest_port == self._port:
                     udp_payload = raw_data[42:]
@@ -55,3 +56,30 @@ class UdpSniffer:
         ip_protocol = ip_header_data[6]
         return ip_protocol
 
+def processData(data):
+    print(f"{time.time()} Got data. Len is {len(data)}")
+
+
+def playFile(fileName, frameSize, framePeriod):
+    data = []
+    f = open(fileName, "rb")
+    data.append(f.read(frameSize))
+    chunk = f.read(frameSize)
+    while chunk:
+        data.append(chunk)
+        chunk = f.read(frameSize)
+    port = 6700
+    upStreamSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    print(f"Created upstream socket. Port {port}")
+    i = 0
+    for frame in data:
+        upStreamSocket.sendto(frame, ("0.0.0.0", port))
+        time.sleep(framePeriod - 0.001)
+        print(f"Sent packet {i}")
+        i += 1
+    print ("============= Done ===============")
+# playFile("/home/me/work/du-sip-client/playback")
+playFile("/home/me/Downloads/playback", 640 * 2, 0.040)
+# sniffer = UdpSniffer(6600)
+# sniffer.read(processData)
+# sniffer.sniff(processData)
