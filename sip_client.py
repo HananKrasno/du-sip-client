@@ -16,19 +16,29 @@ import endpoint as ep
 
 MOBOTIX = "mobotix"
 TSYSTEMS = "tsystems"
+CUSTOM = "custom"
 
 # write=sys.stdout.write
 write = logging.info
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument("--profile", choices=[MOBOTIX, TSYSTEMS], default=MOBOTIX)
+parser.add_argument("--profile", choices=[MOBOTIX, TSYSTEMS, CUSTOM], default=MOBOTIX)
 parser.add_argument("--sip-number", default="")
+parser.add_argument("--user", default="")
+parser.add_argument("--sip-uri", default="")
+parser.add_argument("--password", default="")
+parser.add_argument("--registrar-uri", default="")
+parser.add_argument("--proxy", default="")
 parser.add_argument("--recording-file", default=None)
 parser.add_argument("--downport", type=int, default=6600, help="UDP port for PCM stream from Streamer to SIP server")
 parser.add_argument("--upport", type=int, default=6700, help="UDP port for PCM stream from SIP server to Streamer")
 parser.add_argument("--use-sniffer", action="store_true", help="When defined the downstream socket will work in sniffing mode. "
                                                                "It allows to read the data when the port is used by another application")
+parser.add_argument("--sample-rate", type=int, default=16000)
+parser.add_argument("--frame-length-msec", type=int, default=40)
+
+
 
 args = parser.parse_args()
 
@@ -62,7 +72,7 @@ class SipCall:
             self.appConfig.epConfig.uaConfig.threadCnt = 0
             self.appConfig.epConfig.uaConfig.mainThreadOnly = True
         self.appConfig.epConfig.logConfig.writer = self.logger
-        self.appConfig.epConfig.logConfig.filename = "/tmp/du-sip/cpp.log"
+        self.appConfig.epConfig.logConfig.filename = "/tmp/du-sip/sip_cpp.log"
         self.appConfig.epConfig.logConfig.fileFlags = pj.PJ_O_APPEND
         self.appConfig.epConfig.logConfig.level = 5
         self.appConfig.epConfig.logConfig.consoleLevel = 5
@@ -93,25 +103,18 @@ class SipCall:
             self.sipNumber = defaultSipNumber
         else:
             self.sipNumber = "sip:" + args.sip_number
+        assert args.sip_number != "", f"SIP number is not defined"
         write(f"Sip number is: {self.sipNumber}")
 
-    def createMobotixAccount(self):
+    def createAccount(self, idUri, user, password, registrarUri, proxy):
         self.acfg = pj.AccountConfig()
-        self.acfg.idUri = "sip:driveu@10.20.97.100"
-        cred = pj.AuthCredInfo("digest", "*", "driveu", 0, "")
-        self.acfg.sipConfig.authCreds.append(cred)
-        # Create the account
-        self.acc = pj.Account()
-        self.acc.cfg = self.acfg
-        self.acc.create(self.acfg)
-
-    def createTsystemAccount(self):
-        self.acfg = pj.AccountConfig()
-        self.acfg.idUri = "sip:teleopertor@localhost"
-        self.acfg.regConfig.registrarUri = "sip:cfc-top.germanywestcentral.cloudapp.azure.com"
-        cred = pj.AuthCredInfo("digest", "*", "teleopertor", 0, "D1sp4CFC#2022")
-        self.acfg.sipConfig.authCreds.append(cred)
-        self.acfg.sipConfig.proxies.append("sip:cfc-top.germanywestcentral.cloudapp.azure.com")
+        self.acfg.idUri = "sip:" + idUri
+        self.acfg.regConfig.registrarUri = "sip:" + registrarUri
+        if len(user) > 0:
+            cred = pj.AuthCredInfo("digest", "*", user, 0, password)
+            self.acfg.sipConfig.authCreds.append(cred)
+        if len(proxy) > 0:
+            self.acfg.sipConfig.proxies.append("sip:" + proxy)
         # Create the account
         self.acc = pj.Account()
         self.acc.create(self.acfg)
@@ -124,6 +127,43 @@ class SipCall:
 
         # self.acc.setRegistration(True)
         write("Account successfully created")
+
+    def createTsystemAccount(self):
+        self.createAccount("teleopertor@localhost", "teleopertor", "D1sp4CFC#2022",
+                       "cfc-top.germanywestcentral.cloudapp.azure.com",
+                           "cfc-top.germanywestcentral.cloudapp.azure.com")
+        # self.acfg = pj.AccountConfig()
+        # self.acfg.idUri = "sip:teleopertor@localhost"
+        # self.acfg.regConfig.registrarUri = "sip:cfc-top.germanywestcentral.cloudapp.azure.com"
+        # cred = pj.AuthCredInfo("digest", "*", "teleopertor", 0, "D1sp4CFC#2022")
+        # self.acfg.sipConfig.authCreds.append(cred)
+        # self.acfg.sipConfig.proxies.append("sip:cfc-top.germanywestcentral.cloudapp.azure.com")
+        # # Create the account
+        # self.acc = pj.Account()
+        # self.acc.create(self.acfg)
+        # try:
+        #     self.acc.setRegistration(True)
+        # except pj.Error as error:
+        #     write("Exception:" + error.info())
+        # except Exception as error:
+        #     write("Exception:" + error.info())
+        #
+        # # self.acc.setRegistration(True)
+        write("Account successfully created")
+
+
+    def createMobotixAccount(self):
+        self.acfg = pj.AccountConfig()
+        self.acfg.idUri = "sip:driveu@10.20.97.100"
+        cred = pj.AuthCredInfo("digest", "*", "driveu", 0, "")
+        self.acfg.sipConfig.authCreds.append(cred)
+        # Create the account
+        self.acc = pj.Account()
+        self.acc.cfg = self.acfg
+        self.acc.create(self.acfg)
+
+    def createCustomAccount(self):
+        self.createAccount(args.sip_uri, args.user, args.password, args.registrar_uri, args.proxy)
 
 
     def start(self):
@@ -138,23 +178,21 @@ class SipCall:
         if self.profile == TSYSTEMS:
             self.createTsystemAccount()
             self.setSipNumber(defaultSipNumber="sip:100@localhost")
-            self.downStreamPort = args.downport
-            self.upStreamPort = args.upport
-            write(f"Set SIP T-Systems profile:  "
-                  f"\n\tnumber {self.sipNumber}"
-                  f"\n\tdown stream port {self.downStreamPort}"
-                  f"\n\tup stream port {self.upStreamPort}")
-
         elif self.profile == MOBOTIX:
             self.createMobotixAccount()
             self.setSipNumber(defaultSipNumber="sip:100@10.20.97.222")
-            self.downStreamPort = args.downport
-            self.upStreamPort = args.upport
-            write(f"Set SIP Mobotix profile:  "
-                  f"\n\tnumber {self.sipNumber}"
-                  f"\n\tdown stream port {self.downStreamPort}"
-                  f"\n\tup stream port {self.upStreamPort}")
+        elif self.profile == CUSTOM:
+            self.createCustomAccount()
+            self.setSipNumber(defaultSipNumber="")
+
        # self.listDevices()
+        self.downStreamPort = args.downport
+        self.upStreamPort = args.upport
+        write(f"Set SIP {self.profile} profile:  "
+              f"\n\tnumber {self.sipNumber}"
+              f"\n\tdown stream port {self.downStreamPort}"
+              f"\n\tup stream port {self.upStreamPort}")
+
         audio_dev_man = self.ep.audDevManager()
         audio_dev_man.setNullDev()
 
@@ -165,7 +203,7 @@ class SipCall:
             callUri = self.sipNumber
             self.myCall = ducall.Call(acc=self.acc, peer_uri=callUri, upStreamPort=self.upStreamPort,
                                       downStreamPort=self.downStreamPort, useSniffer=args.use_sniffer,
-                                      playbackFile=args.recording_file)
+                                      playbackFile=args.recording_file, sampleRate=args.sample_rate, frameLen=args.frame_length_msec)
             self.call_param = pj.CallOpParam()
             self.call_param.opt.audioCount = 1
             self.call_param.opt.videoCount = 0
@@ -218,7 +256,7 @@ def initLogger(logPath):
 # Run the main loop
 try:
     # sendTestFile()
-    initLogger("/tmp/du-sip/py.log")
+    initLogger("/tmp/du-sip/sip_py.log")
     # logging.basicConfig(filename="/tmp/du-sip/py.log", level=logging.DEBUG, format='%(asctime)s %(message)s')
     callTest = SipCall(args.profile)
     callTest.call()

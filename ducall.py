@@ -29,6 +29,7 @@ import queue
 import socket
 import threading
 import logging
+import os
 
 
 USE_CUSTOM_MEDIA = True
@@ -55,6 +56,7 @@ class DriveUMediaPort(pj.AudioMediaPort):
         self.useSniffer = useSniffer
         self.playbackFile = None
         if playbackFile:
+            playbackFile = os.path.join("/tmp/du-sip",playbackFile)
             self.playbackFile = open(playbackFile, "wb")
 
         self.upStreamSocket = None
@@ -177,7 +179,10 @@ class Call(pj.Call):
     """
     High level Python Call object, derived from pjsua2's Call object.
     """
-    def __init__(self, acc, peer_uri='', chat=None, call_id=pj.PJSUA_INVALID_ID, downStreamPort=0, upStreamPort=0, useSniffer=None, playbackFile=None):
+    def __init__(self, acc, peer_uri='', chat=None, call_id=pj.PJSUA_INVALID_ID, downStreamPort=0,
+                 upStreamPort=0, useSniffer=None, playbackFile=None, sampleRate=None, frameLen=None):
+        global CLOCK_RATE
+        global FRAME_TIME_USEC
         pj.Call.__init__(self, acc, call_id)
         self.acc = acc
         self.peerUri = peer_uri
@@ -191,6 +196,10 @@ class Call(pj.Call):
         self.med_port = None
         self.useSniffer = useSniffer
         self.playbackFile = playbackFile
+        if sampleRate:
+            CLOCK_RATE = sampleRate
+        if frameLen:
+            FRAME_TIME_USEC = frameLen * 1000
 
     def getAudioMedia(self):
         ci = self.getInfo()

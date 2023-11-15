@@ -1,7 +1,7 @@
 import socket
 import struct
 
-
+SIZE_OF_BUFFER = 1024 * 4
 class UdpSniffer:
     APv4_PROTOCOL = 0x0800
     IP_UDP_PROTOCOL = 17
@@ -13,7 +13,7 @@ class UdpSniffer:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(("0.0.0.0", self._port))
         while True:
-            raw_data, addr = sock.recvfrom(1024)
+            raw_data, addr = sock.recvfrom(SIZE_OF_BUFFER)
             dataProcessor(raw_data)
     def sniff(self, dataProcessor):
         logging.info(f"Creating UdpSniffer on port {self._port}")
@@ -22,7 +22,7 @@ class UdpSniffer:
         pktCount = 0
         logging.info(f"Created UdpSniffer on port {self._port}")
         while True:
-            raw_data, addr = snifferSocket.recvfrom(1024)
+            raw_data, addr = snifferSocket.recvfrom(SIZE_OF_BUFFER)
             # logging.info(f"UDP sniffer started on interface: {addr}")
             if UdpSniffer.pktProtocol(addr) != self.APv4_PROTOCOL or UdpSniffer.pktInterfaceIndex(addr) != 0:
                 continue
