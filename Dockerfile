@@ -1,4 +1,4 @@
-#FROM python:3.9.16-slim-buster AS dependencies
+FROM python:3.9.16-slim-buster AS dependencies
 FROM ubuntu:20.04 AS dependencies
 
 RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
@@ -12,30 +12,10 @@ RUN apt-get update && apt-get install -y \
     wget \
     curl \
     gcc \
-    g++ \
     swig \
     vim \
     unzip \
     libssl-dev \
-    libbz2-dev \
-    libreadline-dev \
-    zlib1g-dev \
-    libffi-dev \
-    libasound2-dev \
-    libv4l-dev \
-    libsdl2-dev \
-    libx264-dev \
-    libavcodec-dev \
-    libavdevice-dev \
-    libavfilter-dev \
-    libavformat-dev \
-    libavresample-dev \
-    libavutil-dev \
-    libpostproc-dev \
-    libswresample-dev \
-    libswscale-dev \
-    libopus-dev \
-    libportaudio2 \
     --assume-yes \
     --no-install-recommends
 
