@@ -1,4 +1,3 @@
-FROM python:3.9.16-slim-buster AS dependencies
 FROM ubuntu:20.04 AS dependencies
 
 RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
