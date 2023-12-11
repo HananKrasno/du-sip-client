@@ -1,8 +1,4 @@
 #
-# pjsua Python GUI Demo
-#
-# Copyright (C)2013 Teluu Inc. (http://www.teluu.com)
-#
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation; either version 2 of the License, or
@@ -40,9 +36,9 @@ BITS_PER_SAMPLE = 16
 FRAME_TIME_USEC = 40000
 
 
-class DriveUMediaPort(pj.AudioMediaPort):
+class CustomMediaPort(pj.AudioMediaPort):
     def __init__(self, upStreamPort, downStreamPort, useSniffer=False, playbackFile=None):
-        logging.info(f"DriveUMediaPort constructor {id(self)}")
+        logging.info(f"CustomMediaPort constructor {id(self)}")
         pj.AudioMediaPort.__init__(self)
         self.frameFromDuCount = 0
         self.frameCount = 0
@@ -168,7 +164,6 @@ class DriveUMediaPort(pj.AudioMediaPort):
             if self.playbackFile:
                 self.playbackFile.write(barr)
 
-            # logging.info(f"Sent frame to DriveU port: {self.upStreamPort} data: {barr[100:]}")
         return
 
 
@@ -228,7 +223,7 @@ class Call(pj.Call):
         fmt.bitsPerSample = BITS_PER_SAMPLE
         fmt.frameTimeUsec = FRAME_TIME_USEC
 
-        self.med_port = DriveUMediaPort(upStreamPort=self.upStreamPort, downStreamPort=self.downStreamPort, useSniffer=self.useSniffer, playbackFile=self.playbackFile)
+        self.med_port = CustomMediaPort(upStreamPort=self.upStreamPort, downStreamPort=self.downStreamPort, useSniffer=self.useSniffer, playbackFile=self.playbackFile)
         self.med_port.createPort("med_port", fmt)
 
 
@@ -249,8 +244,6 @@ class Call(pj.Call):
         audio_media = pj.AudioMedia.typecastFromMedia(media)
 
         # Connect the custom audio media to the audio stream
-        # self.custom_audio_media.startTransmit(speaker)
-        # mik.startTransmit(self.custom_audio_media)
         self.custom_audio_media.startTransmit(speaker)
 
     def onCallMediaState(self, prm):
@@ -311,11 +304,9 @@ class Call(pj.Call):
         self.chat.setTypingIndication(self.peerUri, prm.isTyping)
 
     def onDtmfDigit(self, prm):
-        #msgbox.showinfo("pygui", 'Got DTMF:' + prm.digit)
         pass
 
     def onCallMediaTransportState(self, prm):
-        #msgbox.showinfo("pygui", "Media transport state")
         pass
 
 

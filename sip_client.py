@@ -15,7 +15,7 @@ import endpoint as ep
 
 
 MOBOTIX = "mobotix"
-TSYSTEMS = "tsystems"
+TS = "ts"
 CUSTOM = "custom"
 
 # write=sys.stdout.write
@@ -23,7 +23,7 @@ write = logging.info
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument("--profile", choices=[MOBOTIX, TSYSTEMS, CUSTOM], default=MOBOTIX)
+parser.add_argument("--profile", choices=[MOBOTIX, TS, CUSTOM], default=MOBOTIX)
 parser.add_argument("--sip-number", default="")
 parser.add_argument("--user", default="")
 parser.add_argument("--sip-uri", default="")
@@ -128,28 +128,10 @@ class SipCall:
         # self.acc.setRegistration(True)
         write("Account successfully created")
 
-    def createTsystemAccount(self):
-        self.createAccount("teleopertor@localhost", "teleopertor", "D1sp4CFC#2022",
+    def createTsAccount(self):
+        self.createAccount("teleopertor@localhost", "teleopertor", args.password,
                        "cfc-top.germanywestcentral.cloudapp.azure.com",
                            "cfc-top.germanywestcentral.cloudapp.azure.com")
-        # self.acfg = pj.AccountConfig()
-        # self.acfg.idUri = "sip:teleopertor@localhost"
-        # self.acfg.regConfig.registrarUri = "sip:cfc-top.germanywestcentral.cloudapp.azure.com"
-        # cred = pj.AuthCredInfo("digest", "*", "teleopertor", 0, "D1sp4CFC#2022")
-        # self.acfg.sipConfig.authCreds.append(cred)
-        # self.acfg.sipConfig.proxies.append("sip:cfc-top.germanywestcentral.cloudapp.azure.com")
-        # # Create the account
-        # self.acc = pj.Account()
-        # self.acc.create(self.acfg)
-        # try:
-        #     self.acc.setRegistration(True)
-        # except pj.Error as error:
-        #     write("Exception:" + error.info())
-        # except Exception as error:
-        #     write("Exception:" + error.info())
-        #
-        # # self.acc.setRegistration(True)
-        write("Account successfully created")
 
 
     def createMobotixAccount(self):
@@ -175,9 +157,9 @@ class SipCall:
         # transport.create(transport_cfg)
 
         self.ep.libStart()
-        if self.profile == TSYSTEMS:
-            self.createTsystemAccount()
-            self.setSipNumber(defaultSipNumber="sip:100@localhost")
+        if self.profile == TS:
+            self.createTsAccount()
+            self.setSipNumber(defaultSipNumber="sip:echoTest@localhost")
         elif self.profile == MOBOTIX:
             self.createMobotixAccount()
             self.setSipNumber(defaultSipNumber="sip:100@10.20.97.222")
@@ -208,35 +190,37 @@ class SipCall:
             self.call_param.opt.audioCount = 1
             self.call_param.opt.videoCount = 0
             self.myCall.makeCall(callUri, self.call_param)
+            # Time for async procedures before running event loop
             time.sleep(1)
-           # m = self.getMedia()
-            # am = pj.AudioMedia.typecastFromMedia(m)
-            # self.ep.audDevManager().getCaptureDevMedia().startTransmit(am)
         except pj.Error as e:
             write("Error making the call:", str(e))
+
+        # Run events loop
         while True:
-            time.sleep(0.1)
+            # Checks for events once per 10 Ms
+            time.sleep(0.01)
             self.ep.libHandleEvents(10)
-            # self.myCall.onCallMediaState(self.call_param)
 
     def end(self):
         self.ep.libDestroy()
 
 
-
-def sendTestFile(fileName="/home/me/work/pjproject/pjsip-apps/src/pygui/playfile"):
+# This method is for testing and debugging purposes only. FileName has to be a full path to the
+# recorded PCM stream like: "/home/me/work/pjproject/pjsip-apps/src/pygui/playfile"
+def sendTestFile(fileName, frameLengthMS=40):
     audioData = array('B')
     with open(fileName, "rb") as f:
         audioData.fromfile(f, 96000)
     shift = 0
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    frameLength = frameLengthMS * 0.001
     while True:
         barr = bytes(audioData[shift:shift + 640])
         sock.sendto(barr, ("0.0.0.0", 6700))
         shift += 640
         if shift >= 96000:
             shift = 0
-        time.sleep(0.040)
+        time.sleep(frameLength)
 
 def initLogger(logPath):
     os.makedirs("/tmp/du-sip", mode=0o666, exist_ok=True)
