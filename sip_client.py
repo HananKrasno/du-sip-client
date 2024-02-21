@@ -10,6 +10,7 @@ from logging import handlers
 
 import settings
 import ducall
+from ducall import SHARED_VOLUME_PATH
 import log
 import endpoint as ep
 
@@ -35,6 +36,7 @@ parser.add_argument("--downport", type=int, default=6600, help="UDP port for PCM
 parser.add_argument("--upport", type=int, default=6700, help="UDP port for PCM stream from SIP server to Streamer")
 parser.add_argument("--use-sniffer", action="store_true", help="When defined the downstream socket will work in sniffing mode. "
                                                                "It allows to read the data when the port is used by another application")
+parser.add_argument("--echo", action="store_true", help="Will send obtained packets back instead of sip server")
 parser.add_argument("--sample-rate", type=int, default=16000)
 parser.add_argument("--frame-length-msec", type=int, default=40)
 
@@ -72,7 +74,7 @@ class SipCall:
             self.appConfig.epConfig.uaConfig.threadCnt = 0
             self.appConfig.epConfig.uaConfig.mainThreadOnly = True
         self.appConfig.epConfig.logConfig.writer = self.logger
-        self.appConfig.epConfig.logConfig.filename = "/tmp/du-sip/sip_cpp.log"
+        self.appConfig.epConfig.logConfig.filename = f"{SHARED_VOLUME_PATH}/sip_cpp.log"
         self.appConfig.epConfig.logConfig.fileFlags = pj.PJ_O_APPEND
         self.appConfig.epConfig.logConfig.level = 5
         self.appConfig.epConfig.logConfig.consoleLevel = 5
@@ -185,7 +187,8 @@ class SipCall:
             callUri = self.sipNumber
             self.myCall = ducall.Call(acc=self.acc, peer_uri=callUri, upStreamPort=self.upStreamPort,
                                       downStreamPort=self.downStreamPort, useSniffer=args.use_sniffer,
-                                      playbackFile=args.recording_file, sampleRate=args.sample_rate, frameLen=args.frame_length_msec)
+                                      playbackFile=args.recording_file, sampleRate=args.sample_rate,
+                                      frameLen=args.frame_length_msec, echoMode=args.echo)
             self.call_param = pj.CallOpParam()
             self.call_param.opt.audioCount = 1
             self.call_param.opt.videoCount = 0
@@ -223,7 +226,7 @@ def sendTestFile(fileName, frameLengthMS=40):
         time.sleep(frameLength)
 
 def initLogger(logPath):
-    os.makedirs("/tmp/du-sip", mode=0o666, exist_ok=True)
+    os.makedirs(SHARED_VOLUME_PATH, mode=0o666, exist_ok=True)
  
     log = logging.getLogger('')
     log.setLevel(logging.DEBUG)
@@ -240,8 +243,7 @@ def initLogger(logPath):
 # Run the main loop
 try:
     # sendTestFile()
-    initLogger("/tmp/du-sip/sip_py.log")
-    # logging.basicConfig(filename="/tmp/du-sip/py.log", level=logging.DEBUG, format='%(asctime)s %(message)s')
+    initLogger(f"{SHARED_VOLUME_PATH}/sip_py.log")
     callTest = SipCall(args.profile)
     callTest.call()
 except KeyboardInterrupt:

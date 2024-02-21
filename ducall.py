@@ -20,13 +20,14 @@ import pjsua2 as pj
 import application
 from udpsniffer import UdpSniffer
 import endpoint as ep
+import json
 import struct
 import queue
 import socket
 import threading
 import logging
 import os
-
+import copy
 
 USE_CUSTOM_MEDIA = True
 
@@ -34,23 +35,108 @@ CLOCK_RATE = 16000
 CHANNEL_COUNT = 1
 BITS_PER_SAMPLE = 16
 FRAME_TIME_USEC = 40000
+SHARED_VOLUME_PATH = "/tmp/du-sip"
+
+
+class WatchdogData:
+    VALID = 0
+    ERRONEOUS = 1
+    INTERNAL_INFO = "internal_info"
+    INTERNAL_ERROR = "internal_error"
+    EXTERNAL_ERROR = "external_error"
+
+    def __init__(self):
+        self.state = WatchdogData.VALID
+        self.clientStartTime = time.monotonic()
+        self.lastFrameRequestedTime = 0
+        self.lastFrameReceivedTime = 0
+        self.qsize = 0
+        self.framesRequested = 0
+        self.framesReceived = 0
+
+        self.ipcSocketPath = f"{SHARED_VOLUME_PATH}/ipc.sock"
+
+    def frameRequested(self, qsize, framesRequested):
+        self.lastFrameRequestedTime = time.monotonic()
+        self.qsize = qsize
+        self.framesRequested = framesRequested
+
+    def notifyExternalApp(self, msg_type, content):
+        message = {'type': msg_type, 'message': content}
+        message_json = json.dumps(message)
+        logging.error(f"Got error: {message_json} it will be sent via {self.ipcSocketPath}")
+
+        if not os.path.exists(self.ipcSocketPath):
+            logging.error(f"cannot send error notification - socket {self.ipcSocketPath} doesn not exist")
+            return
+
+        # Create a Unix domain socket
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            try:
+                # Connect to the Unix domain socket
+                sock.connect(self.ipcSocketPath)
+
+                # Send the JSON message
+                sock.sendall(message_json.encode())
+                logging.info(f"Message sent")
+
+            except Exception as e:
+                logging.error(f"Error on sending error message: {e}")
+
+    def frameReceived(self, framesReceived):
+        self.lastFrameReceivedTime = time.monotonic()
+        self.framesReceived = framesReceived
+
+    def callbacksTimeIsValid(self):
+        now = time.monotonic()
+        runningTime = now - self.clientStartTime
+        if int(runningTime) % 30 == 0:
+            logging.info(f"=========  Watchdog Check State {runningTime}  =========")
+            self.notifyExternalApp(WatchdogData.INTERNAL_INFO, f"Client runs {runningTime} sec. "
+                                    f"Requested: {self.framesRequested}, Received  {self.framesReceived} frames")
+
+        if runningTime < 10:
+            return True
+
+        if self.lastFrameReceivedTime == 0 or self.lastFrameRequestedTime == 0:
+            self.notifyExternalApp(WatchdogData.INTERNAL_ERROR, f"Client runs {runningTime} sec but SIP communication still not started")
+            return False
+
+        if (now - self.lastFrameReceivedTime) > 1 or (now - self.lastFrameRequestedTime) > 1:
+            self.notifyExternalApp(WatchdogData.INTERNAL_ERROR, "The SIP packets send/receive is timeouted")
+            return False
+
+        if self.qsize > 10:
+            self.notifyExternalApp(WatchdogData.EXTERNAL_ERROR, f"The to SIP queue size {self.qsize} exceeds the limit")
+            return False
+        return True
+
+    def checkState(self):
+        if self.state == WatchdogData.VALID:
+            self.state = WatchdogData.VALID if self.callbacksTimeIsValid() else WatchdogData.ERRONEOUS
+            if self.state == WatchdogData.ERRONEOUS:
+                logging.critical(f"======================== !!!  Watchdog detected a problem. The client is going to restart!")
+            return self.state
+        return self.state
 
 
 class CustomMediaPort(pj.AudioMediaPort):
-    def __init__(self, upStreamPort, downStreamPort, useSniffer=False, playbackFile=None):
+    def __init__(self,  watchdogData, upStreamPort, downStreamPort, useSniffer=False, playbackFile=None, echoMode=False):
         logging.info(f"CustomMediaPort constructor {id(self)}")
         pj.AudioMediaPort.__init__(self)
+        self.watchdogData = watchdogData
         self.frameFromDuCount = 0
         self.frameCount = 0
         self.framesSentCount = 0
         self.frameBuffer = None
         self.framesToSip = queue.Queue()
-        self.framesFromSip = queue.Queue()
+        self.echoFrames = queue.Queue()
         self.count = 0
         self.downStreamPort = downStreamPort
         self.upStreamPort = upStreamPort
         self.useSniffer = useSniffer
         self.playbackFile = None
+        self.echoMode = echoMode
         if playbackFile:
             playbackFile = os.path.join("/tmp/du-sip",playbackFile)
             self.playbackFile = open(playbackFile, "wb")
@@ -63,28 +149,6 @@ class CustomMediaPort(pj.AudioMediaPort):
             self.downStreamSniffer = UdpSniffer(downStreamPort)
             self.downStreamThread = threading.Thread(target=self.listenForDownStream, daemon=True)
             self.downStreamThread.start()
-
-
-
-    def processStream(self, data):
-        frameBuf = []
-        # logging.info("processStream")
-        for i in range(len(data)):
-            if (i % 2 == 1):
-                # Convert it to signed 16-bit integer
-                x = data[i] << 8 | data[i-1]
-                x = struct.unpack('<h', struct.pack('<H', x))[0]
-                frameBuf.append(x)
-        # logging.info(f"-------------- frame {self.frameCount} received. Size: {frameBuf}")
-        for i in range(0, len(data), 2):
-            self.frameBuffer.append(data[i])
-            self.frameBuffer.append(data[i + 1])
-            if self.frameBuffer.size() == 640:
-                self.framesToSip.put(self.frameBuffer)
-                if self.frameFromDuCount % 50 == 0:
-                    logging.debug(f"---- Added Frame {self.frameFromDuCount}")
-                self.frameFromDuCount += 1
-                self.frameBuffer = pj.ByteVector()
 
     def processStreamAsIs(self, data):
         frameBuffer = pj.ByteVector()
@@ -104,15 +168,20 @@ class CustomMediaPort(pj.AudioMediaPort):
         else:
             logging.info("Downstream initialized in reading mode")
             self.downStreamSniffer.read(self.processStreamAsIs)
-        # self.downStreamSniffer.sniff(self.processStream)
+
 
     def onFrameRequested(self, frame):
         qsize = self.framesToSip.qsize()
+        self.watchdogData.frameRequested(qsize, self.framesSentCount)
         if qsize > 0:
             frame.type = pj.PJMEDIA_TYPE_AUDIO
             # Get a frame from the queue and pass it to PJSIP
             frame.buf = self.framesToSip.get()
             frame.size = frame.buf.size()
+
+            if self.echoMode:
+                barr = bytes(frame.buf)
+                self.upStreamSocket.sendto(barr, ("0.0.0.0", self.upStreamPort))
             if self.framesSentCount % 50 == 0:
                 logging.debug(f"{time.time()}-------- Frames sent: {self.framesSentCount}, size: {frame.buf.size()}")
             self.framesSentCount += 1
@@ -155,7 +224,10 @@ class CustomMediaPort(pj.AudioMediaPort):
 
     def onFrameReceived(self, frame):
         self.frameCount += 1
+        self.watchdogData.frameReceived(self.frameCount)
         if self.upStreamSocket:
+            if self.echoMode:
+                    return
             barr = bytes(frame.buf)
             self.upStreamSocket.sendto(barr, ("0.0.0.0", self.upStreamPort))
             # self.playbackFile.write(barr)
@@ -175,10 +247,11 @@ class Call(pj.Call):
     High level Python Call object, derived from pjsua2's Call object.
     """
     def __init__(self, acc, peer_uri='', chat=None, call_id=pj.PJSUA_INVALID_ID, downStreamPort=0,
-                 upStreamPort=0, useSniffer=None, playbackFile=None, sampleRate=None, frameLen=None):
+                 upStreamPort=0, useSniffer=None, playbackFile=None, sampleRate=None, frameLen=None, echoMode=False):
         global CLOCK_RATE
         global FRAME_TIME_USEC
         pj.Call.__init__(self, acc, call_id)
+        self.watchdogData = WatchdogData()
         self.acc = acc
         self.peerUri = peer_uri
         self.chat = chat
@@ -195,6 +268,15 @@ class Call(pj.Call):
             CLOCK_RATE = sampleRate
         if frameLen:
             FRAME_TIME_USEC = frameLen * 1000
+        self.watchdogThread = threading.Thread(target=self.watchdog, daemon=True)
+        self.watchdogThread.start()
+        self.echoMode = echoMode
+
+    def watchdog(self):
+        while True:
+            if (self.watchdogData.checkState() != WatchdogData.VALID):
+                os._exit(-1)
+            time.sleep(1)
 
     def getAudioMedia(self):
         ci = self.getInfo()
@@ -223,7 +305,9 @@ class Call(pj.Call):
         fmt.bitsPerSample = BITS_PER_SAMPLE
         fmt.frameTimeUsec = FRAME_TIME_USEC
 
-        self.med_port = CustomMediaPort(upStreamPort=self.upStreamPort, downStreamPort=self.downStreamPort, useSniffer=self.useSniffer, playbackFile=self.playbackFile)
+        self.med_port = CustomMediaPort(watchdogData=self.watchdogData, upStreamPort=self.upStreamPort,
+                                        downStreamPort=self.downStreamPort, useSniffer=self.useSniffer,
+                                        playbackFile=self.playbackFile, echoMode=self.echoMode)
         self.med_port.createPort("med_port", fmt)
 
 
